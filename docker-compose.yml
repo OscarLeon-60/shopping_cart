@@ -14,6 +14,7 @@ services:
       - "5432:5432"
     volumes:
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
     networks:
       - ecommerce_net
 
@@ -91,3 +92,6 @@ services:
 networks:
   ecommerce_net:
     driver: bridge
+
+volumes:
+  postgres_data:
