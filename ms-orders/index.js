@@ -58,22 +58,10 @@ app.post("/", async (req, res) => {
     try {
         const { user_id, client_id } = req.body;
 
-        // Generar número de factura con formato FAC-YYYYMMDD1
-        const today = new Date().toISOString().split('T')[0].replace(/-/g, ''); // YYYYMMDD
-        
-        // Contar órdenes de hoy para generar número secuencial
-        const countRes = await pool.query(
-            `SELECT COUNT(*) as count FROM orders 
-             WHERE DATE(created_at) = CURRENT_DATE`,
-            []
-        );
-        
-        const sequentialNumber = parseInt(countRes.rows[0].count) + 1;
-        const invoice = `FAC-${today}${sequentialNumber}`;
-
+        // Crear orden SIN invoice_number (se asigna al checkout)
         const result = await pool.query(
             "INSERT INTO orders (user_id, client_id, invoice_number) VALUES ($1, $2, $3) RETURNING *",
-            [user_id || null, client_id || null, invoice]
+            [user_id || null, client_id || null, null]
         );
         res.status(201).json(result.rows[0]);
     } catch (err) {
@@ -146,19 +134,7 @@ app.post("/:orderId/checkout", async (req, res) => {
         const { orderId } = req.params;
         const { client_id, user_id } = req.body;
 
-        // Actualizar orden con cliente y empleado
-        await pool.query(
-            "UPDATE orders SET client_id=$1, user_id=$2 WHERE id=$3",
-            [client_id, user_id, orderId]
-        );
-
-        // Obtener orden
-        const orderRes = await pool.query(
-            "SELECT * FROM orders WHERE id = $1", [orderId]
-        );
-        const order = orderRes.rows[0];
-
-        // Obtener items
+        // Obtener items primero para validar que no esté vacío
         const itemsRes = await pool.query(
             `SELECT ci.id, ci.quantity, ci.price_at_sale AS price,
               p.name,
@@ -169,6 +145,35 @@ app.post("/:orderId/checkout", async (req, res) => {
             [orderId]
         );
         const items = itemsRes.rows;
+
+        if (items.length === 0) {
+            return res.status(400).json({ error: "El carrito está vacío" });
+        }
+
+        // Generar número de factura con formato FAC-YYYYMMDD1
+        const today = new Date().toISOString().split('T')[0].replace(/-/g, ''); // YYYYMMDD
+        
+        // Contar órdenes finalizadas de hoy
+        const countRes = await pool.query(
+            `SELECT COUNT(*) as count FROM orders 
+             WHERE DATE(created_at) = CURRENT_DATE AND invoice_number IS NOT NULL`,
+            []
+        );
+        
+        const sequentialNumber = parseInt(countRes.rows[0].count) + 1;
+        const invoice = `FAC-${today}${sequentialNumber}`;
+
+        // Actualizar orden con cliente, empleado e invoice_number
+        await pool.query(
+            "UPDATE orders SET client_id=$1, user_id=$2, invoice_number=$3 WHERE id=$4",
+            [client_id, user_id, invoice, orderId]
+        );
+
+        // Obtener orden actualizada
+        const orderRes = await pool.query(
+            "SELECT * FROM orders WHERE id = $1", [orderId]
+        );
+        const order = orderRes.rows[0];
 
         // Obtener cliente
         const clientRes = await pool.query(
@@ -213,20 +218,19 @@ app.get("/reports", async (req, res) => {
       LEFT JOIN clients c ON o.client_id = c.id
       LEFT JOIN users u ON o.user_id = u.id
       LEFT JOIN cart_items ci ON ci.order_id = o.id
+      WHERE o.invoice_number IS NOT NULL
     `;
 
         const params = [];
         if (user_id) {
-            query += " WHERE o.user_id = $1";
+            query += " AND o.user_id = $1";
             params.push(user_id);
         }
 
         query += " GROUP BY o.id, o.invoice_number, o.created_at, c.name, u.name ORDER BY o.created_at DESC";
 
         const result = await pool.query(query, params);
-        // Filtrar órdenes sin items (sin información completa)
-        const validReports = result.rows.filter(r => r.total > 0);
-        res.json(validReports);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
