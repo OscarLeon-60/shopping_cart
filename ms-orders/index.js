@@ -58,18 +58,18 @@ app.post("/", async (req, res) => {
     try {
         const { user_id, client_id } = req.body;
 
-        // Generar número de factura con formato FAC-YYYY-MM-DD-N
-        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        // Generar número de factura con formato FAC-YYYYMMDD1
+        const today = new Date().toISOString().split('T')[0].replace(/-/g, ''); // YYYYMMDD
         
         // Contar órdenes de hoy para generar número secuencial
         const countRes = await pool.query(
             `SELECT COUNT(*) as count FROM orders 
-             WHERE DATE(created_at) = $1`,
-            [today]
+             WHERE DATE(created_at) = CURRENT_DATE`,
+            []
         );
         
         const sequentialNumber = parseInt(countRes.rows[0].count) + 1;
-        const invoice = `FAC-${today}-${sequentialNumber}`;
+        const invoice = `FAC-${today}${sequentialNumber}`;
 
         const result = await pool.query(
             "INSERT INTO orders (user_id, client_id, invoice_number) VALUES ($1, $2, $3) RETURNING *",
