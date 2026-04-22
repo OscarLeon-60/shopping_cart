@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS cart_items (
 -- Admin por defecto
 INSERT INTO users (email, password, role, name)
 VALUES (
-           'admin@shopcart.com',
-           '$2b$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2uheWG/igi.',
-           'admin',
-           'Administrador'
-       ) ON CONFLICT (email) DO NOTHING;
+    'admin@shopcart.com',
+    '$2b$10$kUa1oPm.kCBS9Yj8wjMraOg7zOn2PgKHPrUHN0rqZz1kfz5gxHCE2',
+    'admin',
+    'Administrador'
+) ON CONFLICT (email) DO NOTHING;
