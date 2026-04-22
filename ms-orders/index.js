@@ -58,7 +58,18 @@ app.post("/", async (req, res) => {
     try {
         const { user_id, client_id } = req.body;
 
-        const invoice = "FAC-" + Date.now();
+        // Generar número de factura con formato FAC-YYYY-MM-DD-N
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        
+        // Contar órdenes de hoy para generar número secuencial
+        const countRes = await pool.query(
+            `SELECT COUNT(*) as count FROM orders 
+             WHERE DATE(created_at) = $1`,
+            [today]
+        );
+        
+        const sequentialNumber = parseInt(countRes.rows[0].count) + 1;
+        const invoice = `FAC-${today}-${sequentialNumber}`;
 
         const result = await pool.query(
             "INSERT INTO orders (user_id, client_id, invoice_number) VALUES ($1, $2, $3) RETURNING *",
@@ -197,7 +208,7 @@ app.get("/reports", async (req, res) => {
       SELECT o.id, o.invoice_number, o.created_at,
              c.name AS client_name,
              u.name AS employee_name,
-             SUM(ci.quantity * ci.price_at_sale) AS total
+             COALESCE(SUM(ci.quantity * ci.price_at_sale), 0) AS total
       FROM orders o
       LEFT JOIN clients c ON o.client_id = c.id
       LEFT JOIN users u ON o.user_id = u.id
@@ -210,10 +221,12 @@ app.get("/reports", async (req, res) => {
             params.push(user_id);
         }
 
-        query += " GROUP BY o.id, c.name, u.name ORDER BY o.created_at DESC";
+        query += " GROUP BY o.id, o.invoice_number, o.created_at, c.name, u.name ORDER BY o.created_at DESC";
 
         const result = await pool.query(query, params);
-        res.json(result.rows);
+        // Filtrar órdenes sin items (sin información completa)
+        const validReports = result.rows.filter(r => r.total > 0);
+        res.json(validReports);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
