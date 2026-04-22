@@ -38,6 +38,21 @@ CREATE TABLE IF NOT EXISTS cart_items (
                                           price_at_sale NUMERIC(10,2)
 );
 
+CREATE TABLE IF NOT EXISTS active_carts (
+    id SERIAL PRIMARY KEY,
+    client_id INT REFERENCES clients(id),
+    user_id INT REFERENCES users(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS active_cart_items (
+    id SERIAL PRIMARY KEY,
+    cart_id INT REFERENCES active_carts(id) ON DELETE CASCADE,
+    product_id INT REFERENCES products(id),
+    quantity INT NOT NULL,
+    price NUMERIC(10,2)
+);
+
 -- Admin por defecto
 INSERT INTO users (email, password, role, name)
 VALUES (

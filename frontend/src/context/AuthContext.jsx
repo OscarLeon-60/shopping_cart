@@ -20,6 +20,7 @@ export function AuthProvider({ children }) {
         localStorage.removeItem("token");
         localStorage.removeItem("role");
         localStorage.removeItem("userName");
+        localStorage.removeItem("localCart"); // Limpiar carrito al logout
         setToken(null);
         setRole(null);
         setUserName(null);
