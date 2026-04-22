@@ -18,56 +18,55 @@ Este proyecto implementa un sistema de carrito de compras siguiendo buenas prác
 A continuación se muestra la estructura del carrito de compras:
 
 ![Estructura del carrito](./docs/cart-structure.png)
-
----
-
-## 🗄️ Modelo de Base de Datos
-
-La base de datos está diseñada bajo un modelo relacional que soporta el flujo completo del sistema de carrito de compras:
-
-- Gestión de usuarios con roles
-- Catálogo de productos
-- Registro de clientes
-- Gestión de órdenes
-- Detalle de productos en el carrito
-
 ---
 
 ## 🔄 Evolución de Features por Ambiente
 
-La evolución de un feature se maneja de forma controlada en cada ambiente para garantizar estabilidad y trazabilidad.
-
-- **Dev (desarrollo):** cambios rápidos sobre entidades del ORM, con generación automática del esquema para agilizar desarrollo.
-- **QA (testing):** se aplican migraciones controladas mediante scripts versionados, evitando cambios automáticos del ORM.
-- **Main (producción):** solo se permiten cambios validados; el ORM opera en modo `validate` para garantizar consistencia sin modificar la base de datos.
-
-Este enfoque permite control total del ciclo de vida de la base de datos en todos los ambientes.
+La evolución de un feature se maneja de forma controlada en cada ambiente para garantizar estabilidad y trazabilidad. En **desarrollo (dev)** se realizan cambios sobre las entidades del ORM y se prueban funcionalidades, permitiendo configuraciones flexibles como actualización automática de la base de datos para agilizar el desarrollo; en **qa (testing)** se despliega el código sin permitir modificaciones automáticas del ORM, aplicando en su lugar scripts de migración versionados para validar el comportamiento del sistema; finalmente, en **producción (main)** solo se liberan cambios estables, configurando el ORM en modo validación para que únicamente verifique la consistencia entre las entidades y la base de datos sin alterarla, asegurando así control, estabilidad y consistencia entre ambientes.
 
 ---
 
 ## 🗄️ Gestión de Base de Datos con Liquibase
 
-Liquibase se utiliza como herramienta de control de versiones de base de datos mediante archivos `changeLog`.
-
-Permite:
-
-- Versionar cambios en la base de datos
-- Ejecutar migraciones de forma controlada
-- Mantener trazabilidad de cambios
-- Facilitar rollback en caso de errores
-
-Al integrarlo con el ORM, se desactiva la generación automática del esquema, delegando completamente la gestión estructural a Liquibase.
+Liquibase se utiliza como herramienta de control de versiones de base de datos mediante archivos `changeLog`, donde se definen de manera explícita los cambios estructurales (creación, modificación o eliminación de tablas), permitiendo ejecutar estos cambios de forma ordenada y controlada en cada ambiente; al integrarlo con el ORM, se desactiva la generación automática del esquema configurando el ORM en modo `validate`, de forma que este solo verifique la estructura existente sin crear ni modificar tablas, delegando completamente la gestión de la base de datos a Liquibase, lo cual garantiza trazabilidad, control de cambios y posibilidad de rollback en cualquier entorno.
 
 ---
 
-## 🧱 Esquema de Base de Datos (SQL)
+## ⚙️ Puesta en Marcha
 
-### 👤 Tabla users
-```sql
-CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    email VARCHAR(100) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL,
-    role VARCHAR(20) DEFAULT 'empleado',
-    name VARCHAR(100)
-);
+Sigue estos pasos para ejecutar el proyecto correctamente:
+
+1. Clona el repositorio en tu equipo en la carpeta deseada.
+
+2. Accede a la carpeta raíz del proyecto:
+   ```bash
+   cd shopping_cart
+
+3. Ejecuta los contenedores con Docker:
+    ```bash
+    docker-compose up --build
+
+⚠️ Asegúrate de tener Docker Desktop iniciado antes de ejecutar este comando, de lo contrario no funcionará correctamente.
+
+4. Una vez los servicios estén arriba, inicia el frontend:
+    ```bash
+    cd frontend
+    npm run dev
+
+Abre tu navegador y accede a la aplicación ShopCart.
+
+http://localhost:5173/login
+
+---
+
+## 🔐 Credenciales
+
+### 👑 Rol: Administrador
+- Usuario: admin@shopcart.com
+- Password: admin
+
+### 👷 Rol: Empleado
+- Usuario: empleado_1@shopcart.com
+- Password: 1234
+
+---
