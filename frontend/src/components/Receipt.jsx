@@ -57,14 +57,15 @@ export default function Receipt({ data, onClose }) {
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
             <div className="bg-black bg-opacity-40 absolute inset-0" onClick={onClose} />
-            <div className="bg-white rounded-2xl shadow-xl z-10 p-6 w-full max-w-sm">
+            <div className="bg-white rounded-2xl shadow-xl z-10 w-full max-w-sm flex flex-col max-h-[90vh]">
 
-                <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
                     <h2 className="text-lg font-bold text-gray-800">🧾 Tirilla POS</h2>
                     <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl">✕</button>
                 </div>
 
-                {/* Tirilla */}
+                {/* Tirilla con scroll */}
+                <div className="flex-1 overflow-y-auto px-6 pb-2">
                 <div
                     ref={printRef}
                     className="font-mono text-xs bg-white border border-dashed border-gray-300 rounded-xl p-4"
@@ -141,9 +142,10 @@ export default function Receipt({ data, onClose }) {
                     <div className="center bold">¡Gracias por su compra!</div>
                     <div className="center small">Conserve este documento</div>
                 </div>
+                </div>{/* fin scroll */}
 
-                {/* Botones */}
-                <div className="flex gap-3 mt-4">
+                {/* Botones fijos abajo */}
+                <div className="flex gap-3 px-6 py-4 border-t shrink-0">
                     <button
                         onClick={onClose}
                         className="flex-1 border border-gray-300 text-gray-600 py-2.5 rounded-lg hover:bg-gray-50 transition"
@@ -157,7 +159,6 @@ export default function Receipt({ data, onClose }) {
                         🖨️ Imprimir
                     </button>
                 </div>
-
             </div>
         </div>
     );

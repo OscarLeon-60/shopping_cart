@@ -5,6 +5,28 @@ require("dotenv").config();
 const app = express();
 app.use(express.json());
 
+// Crear tablas de carritos activos si no existen
+async function initActiveCarts() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS active_carts (
+            id SERIAL PRIMARY KEY,
+            client_id INT REFERENCES clients(id),
+            user_id INT REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS active_cart_items (
+            id SERIAL PRIMARY KEY,
+            cart_id INT REFERENCES active_carts(id) ON DELETE CASCADE,
+            product_id INT REFERENCES products(id),
+            quantity INT NOT NULL,
+            price NUMERIC(10,2)
+        )
+    `);
+}
+initActiveCarts().catch(console.error);
+
 // ─── Clientes ─────────────────────────────────────────────────
 app.get("/clients", async (req, res) => {
     try {
@@ -48,6 +70,130 @@ app.delete("/clients/:id", async (req, res) => {
     try {
         await pool.query("DELETE FROM clients WHERE id = $1", [req.params.id]);
         res.json({ message: "Cliente eliminado" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Checkout (crear orden con items en una transacción) ──────
+app.post("/checkout", async (req, res) => {
+    try {
+        const { user_id, client_id, items } = req.body;
+
+        if (!client_id || !items || items.length === 0) {
+            return res.status(400).json({ error: "Cliente e items son requeridos" });
+        }
+
+        // Iniciar transacción
+        await pool.query("BEGIN");
+
+        try {
+            // 1. Crear la orden
+            const orderRes = await pool.query(
+                "INSERT INTO orders (user_id, client_id, invoice_number) VALUES ($1, $2, $3) RETURNING *",
+                [user_id || null, client_id, null]
+            );
+            const orderId = orderRes.rows[0].id;
+
+            // 2. Obtener precios de productos y agregar items al carrito
+            let totalAmount = 0;
+            const cartItemsData = [];
+
+            for (const item of items) {
+                const { product_id, quantity } = item;
+                if (!product_id || !quantity) {
+                    throw new Error("Cada item debe tener product_id y quantity");
+                }
+
+                // Obtener precio del producto
+                const productRes = await pool.query(
+                    "SELECT price FROM products WHERE id = $1",
+                    [product_id]
+                );
+
+                if (productRes.rows.length === 0) {
+                    throw new Error(`Producto ${product_id} no encontrado`);
+                }
+
+                const price_at_sale = productRes.rows[0].price;
+                const subtotal = price_at_sale * quantity;
+                totalAmount += subtotal;
+
+                // Insertar item en carrito
+                const cartItemRes = await pool.query(
+                    "INSERT INTO cart_items (order_id, product_id, quantity, price_at_sale) VALUES ($1, $2, $3, $4) RETURNING *",
+                    [orderId, product_id, quantity, price_at_sale]
+                );
+                cartItemsData.push(cartItemRes.rows[0]);
+            }
+
+            // 3. Generar número de factura
+            const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+            const countRes = await pool.query(
+                `SELECT COUNT(*) as count FROM orders 
+                 WHERE DATE(created_at) = CURRENT_DATE AND invoice_number IS NOT NULL`
+            );
+            const sequentialNumber = parseInt(countRes.rows[0].count) + 1;
+            const invoice = `FAC-${today}${sequentialNumber}`;
+
+            // 4. Actualizar orden con invoice_number
+            await pool.query(
+                "UPDATE orders SET invoice_number=$1 WHERE id=$2",
+                [invoice, orderId]
+            );
+
+            // 5. Descontar stock
+            for (const item of items) {
+                await pool.query(
+                    "UPDATE products SET stock = stock - $1 WHERE id = $2",
+                    [item.quantity, item.product_id]
+                );
+            }
+
+            // 6. Obtener datos para el recibo
+            const updatedOrderRes = await pool.query(
+                "SELECT * FROM orders WHERE id = $1",
+                [orderId]
+            );
+            const updatedOrder = updatedOrderRes.rows[0];
+
+            const clientRes = await pool.query(
+                "SELECT * FROM clients WHERE id = $1",
+                [client_id]
+            );
+            const client = clientRes.rows[0];
+
+            const userRes = await pool.query(
+                "SELECT id, name, email FROM users WHERE id = $1",
+                [user_id]
+            );
+            const employee = userRes.rows[0];
+
+            // 7. Obtener items con información completa para el recibo
+            const recibItems = await pool.query(
+                `SELECT ci.id, ci.quantity, ci.price_at_sale AS price, p.name,
+                 (ci.quantity * ci.price_at_sale) AS subtotal
+                 FROM cart_items ci
+                 JOIN products p ON ci.product_id = p.id
+                 WHERE ci.order_id = $1`,
+                [orderId]
+            );
+
+            // Confirmar transacción
+            await pool.query("COMMIT");
+
+            res.status(201).json({
+                order: updatedOrder,
+                items: recibItems.rows,
+                client,
+                employee,
+                total: totalAmount,
+            });
+        } catch (err) {
+            // Revertir transacción en caso de error
+            await pool.query("ROLLBACK");
+            throw err;
+        }
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -122,6 +268,21 @@ app.get("/:orderId/items", async (req, res) => {
 app.delete("/items/:itemId", async (req, res) => {
     try {
         await pool.query("DELETE FROM cart_items WHERE id = $1", [req.params.itemId]);
+        
+        // Verificar si la orden quedó vacía
+        const remainingItems = await pool.query(
+            "SELECT COUNT(*) as count FROM cart_items WHERE order_id = (SELECT order_id FROM cart_items WHERE id = $1 LIMIT 1)",
+            [req.params.itemId]
+        );
+        
+        // Si no quedan items, borrar la orden
+        if (parseInt(remainingItems.rows[0].count) === 0) {
+            await pool.query(
+                "DELETE FROM orders WHERE id = (SELECT order_id FROM cart_items WHERE id = $1 LIMIT 1)",
+                [req.params.itemId]
+            );
+        }
+        
         res.json({ message: "Item eliminado" });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -150,18 +311,28 @@ app.post("/:orderId/checkout", async (req, res) => {
             return res.status(400).json({ error: "El carrito está vacío" });
         }
 
-        // Generar número de factura con formato FAC-YYYYMMDD1
-        const today = new Date().toISOString().split('T')[0].replace(/-/g, ''); // YYYYMMDD
-        
-        // Contar órdenes finalizadas de hoy
-        const countRes = await pool.query(
-            `SELECT COUNT(*) as count FROM orders 
-             WHERE DATE(created_at) = CURRENT_DATE AND invoice_number IS NOT NULL`,
-            []
+        // Obtener orden actual
+        const orderRes = await pool.query(
+            "SELECT * FROM orders WHERE id = $1", [orderId]
         );
-        
-        const sequentialNumber = parseInt(countRes.rows[0].count) + 1;
-        const invoice = `FAC-${today}${sequentialNumber}`;
+        const order = orderRes.rows[0];
+
+        // Si ya tiene invoice_number, usar el existente
+        let invoice = order.invoice_number;
+        if (!invoice) {
+            // Generar número de factura con formato FAC-YYYYMMDD1
+            const today = new Date().toISOString().split('T')[0].replace(/-/g, ''); // YYYYMMDD
+            
+            // Contar órdenes finalizadas de hoy
+            const countRes = await pool.query(
+                `SELECT COUNT(*) as count FROM orders 
+                 WHERE DATE(created_at) = CURRENT_DATE AND invoice_number IS NOT NULL`,
+                []
+            );
+            
+            const sequentialNumber = parseInt(countRes.rows[0].count) + 1;
+            invoice = `FAC-${today}${sequentialNumber}`;
+        }
 
         // Actualizar orden con cliente, empleado e invoice_number
         await pool.query(
@@ -170,10 +341,10 @@ app.post("/:orderId/checkout", async (req, res) => {
         );
 
         // Obtener orden actualizada
-        const orderRes = await pool.query(
+        const updatedOrderRes = await pool.query(
             "SELECT * FROM orders WHERE id = $1", [orderId]
         );
-        const order = orderRes.rows[0];
+        const updatedOrder = updatedOrderRes.rows[0];
 
         // Obtener cliente
         const clientRes = await pool.query(
@@ -198,7 +369,46 @@ app.post("/:orderId/checkout", async (req, res) => {
             );
         }
 
-        res.json({ order, items, client, employee, total });
+        res.json({ order: updatedOrder, items, client, employee, total });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Detalle de orden ─────────────────────────────────────────
+app.get("/:orderId/detail", async (req, res) => {
+    try {
+        const { orderId } = req.params;
+
+        const orderRes = await pool.query("SELECT * FROM orders WHERE id = $1", [orderId]);
+        if (orderRes.rows.length === 0) return res.status(404).json({ error: "Orden no encontrada" });
+        const order = orderRes.rows[0];
+
+        const itemsRes = await pool.query(`
+            SELECT ci.id, ci.quantity, ci.price_at_sale AS price, p.name,
+                   (ci.quantity * ci.price_at_sale) AS subtotal
+            FROM cart_items ci
+            JOIN products p ON ci.product_id = p.id
+            WHERE ci.order_id = $1
+        `, [orderId]);
+
+        const clientRes = order.client_id
+            ? await pool.query("SELECT * FROM clients WHERE id = $1", [order.client_id])
+            : { rows: [] };
+
+        const userRes = order.user_id
+            ? await pool.query("SELECT id, name, email FROM users WHERE id = $1", [order.user_id])
+            : { rows: [] };
+
+        const total = itemsRes.rows.reduce((acc, item) => acc + parseFloat(item.subtotal), 0);
+
+        res.json({
+            order,
+            items: itemsRes.rows,
+            client: clientRes.rows[0] || null,
+            employee: userRes.rows[0] || null,
+            total,
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -231,6 +441,209 @@ app.get("/reports", async (req, res) => {
 
         const result = await pool.query(query, params);
         res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ─── Carritos Activos ─────────────────────────────────────────
+
+app.get("/active-carts", async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT ac.id, ac.client_id, ac.user_id, ac.created_at,
+                   c.name AS client_name, c.cedula AS client_cedula,
+                   COUNT(aci.id) AS item_count,
+                   COALESCE(SUM(aci.quantity * aci.price), 0) AS total
+            FROM active_carts ac
+            LEFT JOIN clients c ON ac.client_id = c.id
+            LEFT JOIN active_cart_items aci ON aci.cart_id = ac.id
+            GROUP BY ac.id, c.name, c.cedula
+            ORDER BY ac.created_at ASC
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post("/active-carts", async (req, res) => {
+    try {
+        const { client_id, user_id } = req.body;
+        if (!client_id) return res.status(400).json({ error: "client_id requerido" });
+
+        const existing = await pool.query(
+            "SELECT id FROM active_carts WHERE client_id = $1",
+            [client_id]
+        );
+        if (existing.rows.length > 0) {
+            return res.status(409).json({
+                error: "Este cliente ya tiene un carrito activo",
+                cart_id: existing.rows[0].id
+            });
+        }
+
+        const result = await pool.query(
+            "INSERT INTO active_carts (client_id, user_id) VALUES ($1, $2) RETURNING *",
+            [client_id, user_id || null]
+        );
+        res.status(201).json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get("/active-carts/:cartId/items", async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT aci.id, aci.quantity, aci.price, p.name, p.id AS product_id,
+                   (aci.quantity * aci.price) AS subtotal
+            FROM active_cart_items aci
+            JOIN products p ON aci.product_id = p.id
+            WHERE aci.cart_id = $1
+        `, [req.params.cartId]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post("/active-carts/:cartId/items", async (req, res) => {
+    try {
+        const { product_id, quantity } = req.body;
+        if (!product_id || !quantity) return res.status(400).json({ error: "Faltan datos" });
+
+        const productRes = await pool.query(
+            "SELECT price FROM products WHERE id = $1", [product_id]
+        );
+        if (productRes.rows.length === 0) return res.status(404).json({ error: "Producto no encontrado" });
+
+        const price = productRes.rows[0].price;
+
+        const existing = await pool.query(
+            "SELECT id FROM active_cart_items WHERE cart_id = $1 AND product_id = $2",
+            [req.params.cartId, product_id]
+        );
+
+        let result;
+        if (existing.rows.length > 0) {
+            result = await pool.query(
+                "UPDATE active_cart_items SET quantity = quantity + $1 WHERE id = $2 RETURNING *",
+                [quantity, existing.rows[0].id]
+            );
+        } else {
+            result = await pool.query(
+                "INSERT INTO active_cart_items (cart_id, product_id, quantity, price) VALUES ($1, $2, $3, $4) RETURNING *",
+                [req.params.cartId, product_id, quantity, price]
+            );
+        }
+        res.status(201).json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete("/active-carts/:cartId/items/:itemId", async (req, res) => {
+    try {
+        await pool.query(
+            "DELETE FROM active_cart_items WHERE id = $1 AND cart_id = $2",
+            [req.params.itemId, req.params.cartId]
+        );
+        res.json({ message: "Item eliminado" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete("/active-carts/:cartId", async (req, res) => {
+    try {
+        await pool.query("DELETE FROM active_carts WHERE id = $1", [req.params.cartId]);
+        res.json({ message: "Carrito eliminado" });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post("/active-carts/:cartId/checkout", async (req, res) => {
+    try {
+        const { cartId } = req.params;
+        const { user_id } = req.body;
+
+        const cartRes = await pool.query("SELECT * FROM active_carts WHERE id = $1", [cartId]);
+        if (cartRes.rows.length === 0) return res.status(404).json({ error: "Carrito no encontrado" });
+        const cart = cartRes.rows[0];
+
+        const itemsRes = await pool.query(`
+            SELECT aci.id, aci.product_id, aci.quantity, aci.price,
+                   p.name, (aci.quantity * aci.price) AS subtotal
+            FROM active_cart_items aci
+            JOIN products p ON aci.product_id = p.id
+            WHERE aci.cart_id = $1
+        `, [cartId]);
+        const items = itemsRes.rows;
+
+        if (items.length === 0) return res.status(400).json({ error: "El carrito está vacío" });
+
+        await pool.query("BEGIN");
+        try {
+            const finalUserId = user_id || cart.user_id;
+            const orderRes = await pool.query(
+                "INSERT INTO orders (user_id, client_id, invoice_number) VALUES ($1, $2, NULL) RETURNING *",
+                [finalUserId, cart.client_id]
+            );
+            const orderId = orderRes.rows[0].id;
+
+            let totalAmount = 0;
+            for (const item of items) {
+                await pool.query(
+                    "INSERT INTO cart_items (order_id, product_id, quantity, price_at_sale) VALUES ($1, $2, $3, $4)",
+                    [orderId, item.product_id, item.quantity, item.price]
+                );
+                totalAmount += parseFloat(item.subtotal);
+            }
+
+            const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
+            const countRes = await pool.query(
+                "SELECT COUNT(*) as count FROM orders WHERE DATE(created_at) = CURRENT_DATE AND invoice_number IS NOT NULL"
+            );
+            const sequentialNumber = parseInt(countRes.rows[0].count) + 1;
+            const invoice = `FAC-${today}${sequentialNumber}`;
+
+            await pool.query("UPDATE orders SET invoice_number=$1 WHERE id=$2", [invoice, orderId]);
+
+            for (const item of items) {
+                await pool.query(
+                    "UPDATE products SET stock = stock - $1 WHERE id = $2",
+                    [item.quantity, item.product_id]
+                );
+            }
+
+            await pool.query("DELETE FROM active_carts WHERE id = $1", [cartId]);
+
+            const updatedOrderRes = await pool.query("SELECT * FROM orders WHERE id = $1", [orderId]);
+            const clientRes = await pool.query("SELECT * FROM clients WHERE id = $1", [cart.client_id]);
+            const userRes = await pool.query("SELECT id, name, email FROM users WHERE id = $1", [finalUserId]);
+            const receiptItemsRes = await pool.query(`
+                SELECT ci.id, ci.quantity, ci.price_at_sale AS price, p.name,
+                       (ci.quantity * ci.price_at_sale) AS subtotal
+                FROM cart_items ci
+                JOIN products p ON ci.product_id = p.id
+                WHERE ci.order_id = $1
+            `, [orderId]);
+
+            await pool.query("COMMIT");
+
+            res.status(201).json({
+                order: updatedOrderRes.rows[0],
+                items: receiptItemsRes.rows,
+                client: clientRes.rows[0],
+                employee: userRes.rows[0],
+                total: totalAmount,
+            });
+        } catch (err) {
+            await pool.query("ROLLBACK");
+            throw err;
+        }
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

@@ -192,6 +192,13 @@ app.delete("/orders/items/:itemId", verifyToken, async (req, res) => {
     res.status(response.status).json(data);
 });
 
+// ─── Detalle de orden ─────────────────────────────────────────
+app.get("/orders/:orderId/detail", verifyToken, async (req, res) => {
+    const response = await fetch(`http://ms-orders:3002/${req.params.orderId}/detail`);
+    const data = await response.json();
+    res.status(response.status).json(data);
+});
+
 // ─── Reportes ─────────────────────────────────────────────────
 app.get("/reports", verifyToken, async (req, res) => {
     const userId = req.user.role === "admin" ? null : req.user.id;
@@ -203,9 +210,79 @@ app.get("/reports", verifyToken, async (req, res) => {
     res.status(response.status).json(data);
 });
 
-// ─── Finalizar venta ──────────────────────────────────────────
+// ─── Finalizar venta (nueva transacción: crea orden con items) ─
+app.post("/orders/checkout", verifyToken, async (req, res) => {
+    const response = await fetch("http://ms-orders:3002/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...req.body, user_id: req.user.id }),
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+});
+
+// ─── Finalizar venta (antigua: para órdenes existentes) ─────────
 app.post("/orders/:orderId/checkout", verifyToken, async (req, res) => {
     const response = await fetch(`http://ms-orders:3002/${req.params.orderId}/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...req.body, user_id: req.user.id }),
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+});
+
+// ─── Carritos Activos ─────────────────────────────────────────
+app.get("/active-carts", verifyToken, async (req, res) => {
+    const response = await fetch("http://ms-orders:3002/active-carts");
+    const data = await response.json();
+    res.status(response.status).json(data);
+});
+
+app.post("/active-carts", verifyToken, async (req, res) => {
+    const response = await fetch("http://ms-orders:3002/active-carts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...req.body, user_id: req.user.id }),
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+});
+
+app.get("/active-carts/:cartId/items", verifyToken, async (req, res) => {
+    const response = await fetch(`http://ms-orders:3002/active-carts/${req.params.cartId}/items`);
+    const data = await response.json();
+    res.status(response.status).json(data);
+});
+
+app.post("/active-carts/:cartId/items", verifyToken, async (req, res) => {
+    const response = await fetch(`http://ms-orders:3002/active-carts/${req.params.cartId}/items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body),
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+});
+
+app.delete("/active-carts/:cartId/items/:itemId", verifyToken, async (req, res) => {
+    const response = await fetch(`http://ms-orders:3002/active-carts/${req.params.cartId}/items/${req.params.itemId}`, {
+        method: "DELETE",
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+});
+
+app.delete("/active-carts/:cartId", verifyToken, async (req, res) => {
+    const response = await fetch(`http://ms-orders:3002/active-carts/${req.params.cartId}`, {
+        method: "DELETE",
+    });
+    const data = await response.json();
+    res.status(response.status).json(data);
+});
+
+app.post("/active-carts/:cartId/checkout", verifyToken, async (req, res) => {
+    const response = await fetch(`http://ms-orders:3002/active-carts/${req.params.cartId}/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...req.body, user_id: req.user.id }),
